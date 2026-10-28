@@ -1,0 +1,31 @@
+# Compose de UM cliente. O setup.sh copia este arquivo para
+# /opt/seminario/clientes/<cliente>/ e cria um .env próprio para cada um.
+# Como cada cliente é um projeto Compose separado, o deploy de um
+# nunca reinicia o container de outro.
+
+name: ${CLIENTE}
+
+services:
+  app:
+    image: ${IMAGE}:${TAG}
+    container_name: ${CLIENTE}-app
+    restart: unless-stopped
+    environment:
+      CLIENTE: ${CLIENTE}
+      COR: ${COR}
+    networks:
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.${CLIENTE}.rule=Host(`${CLIENTE}.${DOMINIO}`)
+      - traefik.http.routers.${CLIENTE}.entrypoints=websecure
+      - traefik.http.routers.${CLIENTE}.tls.certresolver=le
+      - traefik.http.services.${CLIENTE}.loadbalancer.server.port=3000
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+networks:
+  proxy:
+    external: true

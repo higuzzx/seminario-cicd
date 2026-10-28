@@ -1,0 +1,28 @@
+# Garante que todo Pull Request esteja vinculado a um Work Item do Azure Boards.
+# O vínculo é feito pela menção AB#<id> no título ou na descrição do PR.
+# Com o app "Azure Boards" instalado no GitHub, essa menção cria o link
+# automaticamente, e "Fixes AB#<id>" move o item para Done quando o PR é mergeado.
+
+name: Vínculo com Azure Boards
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  checar-work-item:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar AB#<id> no PR
+        env:
+          TITULO: ${{ github.event.pull_request.title }}
+          CORPO: ${{ github.event.pull_request.body }}
+        run: |
+          if echo "$TITULO $CORPO" | grep -qE 'AB#[0-9]+'; then
+            IDS=$(echo "$TITULO $CORPO" | grep -oE 'AB#[0-9]+' | sort -u | tr '\n' ' ')
+            echo "PR vinculado a: $IDS"
+            echo "### Work items vinculados: $IDS" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::O PR precisa referenciar um work item do Azure Boards (ex.: 'Fixes AB#123') no título ou na descrição."
+            exit 1
+          fi

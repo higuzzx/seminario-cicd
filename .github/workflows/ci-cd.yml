@@ -1,0 +1,167 @@
+# Pipeline CI/CD do seminário: Build → Push → Deploy
+#
+# Quando roda:
+#   - Pull Request para main ......... só Build (testes + build da imagem, sem publicar)
+#   - Push de tag vX.Y.Z ............. Build + Push + Deploy no cliente piloto (DEFAULT_CLIENTE)
+#   - Manual (Run workflow) .......... Build + Push + Deploy no cliente escolhido
+#                                      ou, se informar "tag_existente", só Deploy (rollback)
+#
+# Tag da imagem: <SemVer>-<short hash>  ex.: 1.2.0-a1b2c3d
+# (o "+" do SemVer não é permitido em tags Docker, por isso usamos "-")
+
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      cliente:
+        description: 'Cliente que vai receber o deploy'
+        type: choice
+        options: [cliente-a, cliente-b]
+        required: true
+      tag_existente:
+        description: 'Opcional: tag já publicada para redeploy/rollback (ex.: 1.0.0-a1b2c3d). Vazio = build novo'
+        type: string
+        required: false
+
+env:
+  IMAGE: ${{ vars.DOCKERHUB_USERNAME }}/seminario-cicd-app
+
+concurrency:
+  group: cicd-${{ github.event_name == 'pull_request' && github.ref || inputs.cliente || 'piloto' }}
+  cancel-in-progress: false
+
+jobs:
+  # ─────────────────────────── 1. BUILD ───────────────────────────
+  build:
+    name: 1 · Build
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.tag_existente != '') }}
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.versao.outputs.image_tag }}
+      semver: ${{ steps.versao.outputs.semver }}
+    steps:
+      - name: Checkout (com histórico, para ler as tags do Git)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Instalar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Rodar testes
+        working-directory: app
+        run: npm test
+
+      - name: Calcular versão (SemVer + short hash)
+        id: versao
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            SEMVER="${GITHUB_REF_NAME#v}"
+          else
+            ULTIMA=$(git describe --tags --abbrev=0 --match 'v*.*.*' 2>/dev/null || echo "v0.1.0")
+            SEMVER="${ULTIMA#v}"
+          fi
+          SHORT_SHA=$(git rev-parse --short=7 HEAD)
+          IMAGE_TAG="${SEMVER}-${SHORT_SHA}"
+          echo "semver=$SEMVER"       >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "### Imagem: \`$IMAGE:$IMAGE_TAG\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build da imagem Docker
+        run: |
+          docker build \
+            --build-arg APP_VERSION=${{ steps.versao.outputs.semver }} \
+            --build-arg APP_COMMIT="$(git rev-parse --short=7 HEAD)" \
+            -t "$IMAGE:${{ steps.versao.outputs.image_tag }}" \
+            app/
+
+      - name: Salvar imagem para o próximo job
+        if: github.event_name != 'pull_request'
+        run: docker save "$IMAGE:${{ steps.versao.outputs.image_tag }}" | gzip > image.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: imagem
+          path: image.tar.gz
+          retention-days: 1
+
+  # ─────────────────────────── 2. PUSH ───────────────────────────
+  push:
+    name: 2 · Push (Docker Hub)
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: imagem
+
+      - name: Carregar imagem
+        run: gunzip -c image.tar.gz | docker load
+
+      - name: Login no Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publicar tags
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+          SEMVER: ${{ needs.build.outputs.semver }}
+        run: |
+          docker push "$IMAGE:$IMAGE_TAG"
+          # Em release (tag vX.Y.Z) também publica a versão "limpa" e latest
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            docker tag "$IMAGE:$IMAGE_TAG" "$IMAGE:$SEMVER"
+            docker tag "$IMAGE:$IMAGE_TAG" "$IMAGE:latest"
+            docker push "$IMAGE:$SEMVER"
+            docker push "$IMAGE:latest"
+          fi
+
+  # ─────────────────────────── 3. DEPLOY ───────────────────────────
+  deploy:
+    name: 3 · Deploy via SSH
+    needs: [build, push]
+    if: >-
+      always() && github.event_name != 'pull_request' &&
+      (needs.push.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' && inputs.tag_existente != ''))
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.cliente || vars.DEFAULT_CLIENTE || 'cliente-a' }}
+    env:
+      CLIENTE: ${{ inputs.cliente || vars.DEFAULT_CLIENTE || 'cliente-a' }}
+      IMAGE_TAG: ${{ inputs.tag_existente || needs.build.outputs.image_tag }}
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+    steps:
+      - name: Validar parâmetros
+        run: |
+          [[ "$CLIENTE"   =~ ^[a-z0-9-]+$ ]]     || { echo "Cliente inválido: $CLIENTE"; exit 1; }
+          [[ "$IMAGE_TAG" =~ ^[0-9A-Za-z.-]+$ ]] || { echo "Tag inválida: $IMAGE_TAG"; exit 1; }
+          echo "### Deploy de \`$IMAGE_TAG\` em **$CLIENTE**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Configurar chave SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Atualizar apenas o container do cliente
+        run: |
+          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" \
+            "/opt/seminario/scripts/deploy.sh '$CLIENTE' '$IMAGE_TAG'"
+
+      - name: Limpar chave
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

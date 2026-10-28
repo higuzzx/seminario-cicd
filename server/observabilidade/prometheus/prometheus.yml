@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # Métricas da própria app de cada cliente (/metrics)
+  - job_name: clientes
+    static_configs:
+      - targets: ['cliente-a-app:3000']
+        labels: { cliente: cliente-a }
+      - targets: ['cliente-b-app:3000']
+        labels: { cliente: cliente-b }
+
+  # Proxy reverso: requisições, latência e status por roteador
+  - job_name: traefik
+    static_configs:
+      - targets: ['traefik:8082']
+
+  # CPU e memória de cada container
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']

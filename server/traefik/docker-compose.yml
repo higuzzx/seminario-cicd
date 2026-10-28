@@ -1,0 +1,51 @@
+# Proxy reverso: recebe tudo nas portas 80/443 e encaminha para o container
+# certo pelo nome do host. Os containers se "anunciam" por labels.
+# Certificados HTTPS emitidos automaticamente pelo Let's Encrypt.
+
+services:
+  traefik:
+    image: traefik:v3
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy
+      # HTTP → HTTPS
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      # Let's Encrypt
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      # Métricas para o Prometheus (porta interna, não exposta)
+      - --entrypoints.metrics.address=:8082
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entrypoint=metrics
+      # Painel e logs
+      - --api.dashboard=true
+      - --accesslog=true
+      - --log.level=INFO
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+    networks:
+      - proxy
+    labels:
+      - traefik.enable=true
+      # Middleware de login reaproveitado pelos painéis (Dozzle, Prometheus)
+      - traefik.http.middlewares.painel-auth.basicauth.users=${PAINEL_AUTH}
+      - traefik.http.routers.painel.rule=Host(`traefik.${DOMINIO}`)
+      - traefik.http.routers.painel.entrypoints=websecure
+      - traefik.http.routers.painel.tls.certresolver=le
+      - traefik.http.routers.painel.service=api@internal
+      - traefik.http.routers.painel.middlewares=painel-auth
+
+networks:
+  proxy:
+    external: true
