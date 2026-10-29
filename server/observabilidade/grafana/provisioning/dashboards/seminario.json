@@ -1,0 +1,102 @@
+{
+  "uid": "seminario-cicd",
+  "title": "Seminário CI/CD",
+  "tags": ["seminario"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "schemaVersion": 39,
+  "templating": {
+    "list": [
+      {
+        "name": "ds",
+        "label": "Fonte de dados",
+        "type": "datasource",
+        "query": "prometheus",
+        "hide": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Versão em cada cliente",
+      "description": "Qual versão e commit cada cliente está rodando agora",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${ds}" },
+          "expr": "app_info",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "Value": true, "__name__": true, "instance": true, "job": true, "exported_cliente": true },
+            "renameByName": { "cliente": "Cliente", "version": "Versão", "commit": "Commit" },
+            "indexByName": { "cliente": 0, "version": 1, "commit": 2 }
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "No ar há",
+      "description": "Tempo desde que o container de cada cliente subiu (zera a cada deploy)",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${ds}" },
+          "expr": "max by (cliente) (app_uptime_seconds)",
+          "legendFormat": "{{cliente}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "textMode": "value_and_name" }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Requisições por segundo",
+      "description": "Acessos às páginas de cada cliente",
+      "gridPos": { "x": 0, "y": 7, "w": 12, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${ds}" },
+          "expr": "sum by (cliente) (rate(app_http_requests_total{route=\"/\"}[1m]))",
+          "legendFormat": "{{cliente}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Memória por container",
+      "description": "Medida pelo cAdvisor",
+      "gridPos": { "x": 12, "y": 7, "w": 12, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${ds}" },
+          "expr": "sum by (name) (container_memory_usage_bytes{name!=\"\"})",
+          "legendFormat": "{{name}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] }
+    }
+  ]
+}
