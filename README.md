@@ -187,3 +187,5 @@ Histórico em `/opt/seminario/deploys.log`.
 - Parâmetros do deploy são validados no pipeline **e** no servidor (evita injeção de comando).
 - A imagem roda como usuário `node`, não root, e tem `HEALTHCHECK`.
 - Painéis protegidos por senha no Traefik; só as portas 22, 80 e 443 ficam abertas.
+
+> Integração com o Azure Boards: PRs vinculados às tarefas por AB#<id>.
