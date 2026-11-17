@@ -58,7 +58,7 @@ function page() {
 <body>
   <div class="card">
     <h1>${CLIENTE}</h1>
-    <div class="sub">Seminário CI/CD · Nova versão publicada pelo CI/CD</div>
+    <div class="sub">Seminário CI/CD · Versão final da apresentação</div>
     <dl>
       <dt>Versão</dt><dd>${VERSION}</dd>
       <dt>Commit</dt><dd>${COMMIT}</dd>
